@@ -3,7 +3,9 @@ from tkinter import filedialog, messagebox
 from PIL import Image
 import imagehash
 import firebase_admin
-from firebase_admin import credentials, firestore
+from firebase_admin import credentials, firestore, storage
+from google.cloud import vision
+import os
 
 # Initialize Firebase
 cred = credentials.Certificate('/Users/rosshartigan/Nelson Development/Motion Ads/pHash-Python-Project/firebase credentials/motion-hash-tester-firebase-adminsdk-qgyxp-2782717ee6.json')
@@ -11,8 +13,10 @@ firebase_admin.initialize_app(cred)
 
 db = firestore.client()
 
-# Global variable to store the hash of the selected image
+# Global variables to store the hash of the selected image and detected objects
 hash1 = None
+detected_objects = []
+manual_review_flag = False
 
 # Function to generate different types of hashes
 def generate_hash(image, hash_type='phash'):
@@ -24,6 +28,29 @@ def generate_hash(image, hash_type='phash'):
         return imagehash.dhash(image)
     elif hash_type == 'whash':
         return imagehash.whash(image)
+
+# Google Vision AI - Object Detection
+def localize_objects(path):
+    """Detects objects in a local image."""
+    global detected_objects
+    client = vision.ImageAnnotatorClient()
+
+    # Read the local image file
+    with open(path, "rb") as image_file:
+        content = image_file.read()
+    image = vision.Image(content=content)
+
+    # Perform object localization (detection)
+    objects = client.object_localization(image=image).localized_object_annotations
+
+    detected_objects = []  # Reset detected objects
+    print(f"Number of objects found: {len(objects)}")
+    for object_ in objects:
+        detected_objects.append(f"{object_.name} (confidence: {object_.score:.2f})")
+        print(f"\n{object_.name} (confidence: {object_.score:.2f})")
+        print("Normalized bounding polygon vertices: ")
+        for vertex in object_.bounding_poly.normalized_vertices:
+            print(f" - ({vertex.x}, {vertex.y})")
 
 # Load and hash the selected image based on hash type
 def load_and_hash_image(hash_type='phash'):
@@ -43,8 +70,13 @@ def load_and_hash_image(hash_type='phash'):
             # Generate the selected hash type
             hash1 = generate_hash(img, hash_type)
 
-            # Display the generated hash
+            # Perform object detection using Google Vision API
+            localize_objects(file_path)
+
+            # Display the generated hash and detected objects
             hash_label1.config(text=f"Image Hash ({hash_type.upper()}): {hash1}")
+            object_label.config(text=f"Detected Objects: {', '.join(detected_objects)}")
+
         except Exception as e:
             messagebox.showerror("Error", f"Error loading image: {e}")
     else:
@@ -65,48 +97,47 @@ def store_hash():
             messagebox.showerror("Error", f"Error storing hash: {e}")
     else:
         messagebox.showinfo("Info", "Please select an image before storing the hash.")
-        
 
+# Compare the newly generated hash with the stored ones in Firestore
 def compare_hashes():
     if hash1 is not None:
         try:
-            #Get document from firestore
+            # Get the selected document from Firestore
             doc_ref = db.collection('campaign_one').document(document_type_var.get())
             doc = doc_ref.get()
-            
+
             if doc.exists:
                 stored_hashes = doc.to_dict().get('hashes', [])
                 if not stored_hashes:
                     messagebox.showinfo("Info", "No hashes stored for this document type.")
                     return
-                
+
                 best_match = None
                 best_similarity = 0
-                
-                #loop through to test hash comparisons
+
+                # Compare the newly generated hash with each stored hash
                 for stored_hash_str in stored_hashes:
                     stored_hash = imagehash.hex_to_hash(stored_hash_str)
                     hamming_distance = hash1 - stored_hash
                     total_bits = len(bin(int(str(hash1), 16))) - 2
                     similarity_percentage = (1 - hamming_distance / total_bits) * 100
-                    
+
                     if similarity_percentage > best_similarity:
                         best_match = stored_hash_str
                         best_similarity = similarity_percentage
-                        
+
                 # Display the best match and its similarity percentage
                 result_label.config(text=f"Best match: {best_match}, Similarity: {best_similarity:.2f}%")
             else:
-                messagebox.showinfo("Info", "Selected Document does not exist.")
+                messagebox.showinfo("Info", "Selected document does not exist.")
         except Exception as e:
             messagebox.showerror("Error", f"Error comparing hashes: {e}")
     else:
         messagebox.showinfo("Info", "Please select an image before comparing hashes.")
-                    
 
 # Set up the GUI
 root = tk.Tk()
-root.title("Image Hashing and Firestore Storage")
+root.title("Image Hashing and Firestore Storage with Vision AI")
 
 # Hash type selection dropdown menu
 hash_type_var = tk.StringVar(value="phash")  # Default value
@@ -142,11 +173,15 @@ select_image_button.pack(pady=10)
 hash_label1 = tk.Label(root, text="Image hash will be displayed here.")
 hash_label1.pack(pady=5)
 
+# Label to display detected objects using Vision AI
+object_label = tk.Label(root, text="Detected Objects will be displayed here.")
+object_label.pack(pady=5)
+
 # Button to store the hash in Firestore
 store_button = tk.Button(root, text="Store Hash in Firestore", command=store_hash)
 store_button.pack(pady=20)
 
-#Compare hashes against the ones in firestore document array
+# Button to compare the new hash with stored hashes
 compare_button = tk.Button(root, text="Compare Hashes", command=compare_hashes)
 compare_button.pack(pady=10)
 
@@ -155,5 +190,5 @@ result_label = tk.Label(root, text="Comparison result will be displayed here.")
 result_label.pack(pady=5)
 
 # Start the GUI event loop
-root.geometry("400x500")
+root.geometry("600x600")
 root.mainloop()
