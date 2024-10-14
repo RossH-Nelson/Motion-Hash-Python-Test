@@ -1,22 +1,26 @@
 import tkinter as tk
 from tkinter import filedialog, messagebox
-from PIL import Image
+from PIL import Image, ImageTk
 import imagehash
 import firebase_admin
 from firebase_admin import credentials, firestore, storage
 from google.cloud import vision
 import os
+import io
 
 # Initialize Firebase
 cred = credentials.Certificate('/Users/rosshartigan/Nelson Development/Motion Ads/pHash-Python-Project/firebase credentials/motion-hash-tester-firebase-adminsdk-qgyxp-2782717ee6.json')
-firebase_admin.initialize_app(cred)
+firebase_admin.initialize_app(cred, {
+    'storageBucket': 'motion-hash-tester.appspot.com'
+})
 
 db = firestore.client()
+bucket = storage.bucket()
 
 # Global variables to store the hash of the selected image and detected objects
 hash1 = None
 detected_objects = []
-manual_review_flag = False
+file_path_global = None  # Store the path of the selected image
 
 # Function to generate different types of hashes
 def generate_hash(image, hash_type='phash'):
@@ -54,7 +58,7 @@ def localize_objects(path):
 
 # Load and hash the selected image based on hash type
 def load_and_hash_image(hash_type='phash'):
-    global hash1
+    global hash1, file_path_global
 
     # Open a file dialog to select an image
     file_path = filedialog.askopenfilename(
@@ -70,6 +74,9 @@ def load_and_hash_image(hash_type='phash'):
             # Generate the selected hash type
             hash1 = generate_hash(img, hash_type)
 
+            # Save the image path to a global variable for future storage
+            file_path_global = file_path
+
             # Perform object detection using Google Vision API
             localize_objects(file_path)
 
@@ -82,21 +89,81 @@ def load_and_hash_image(hash_type='phash'):
     else:
         messagebox.showinfo("Info", "No file selected.")
 
-# Store the hash in Firestore
+# Store the hash in Firestore and upload the image to Firebase Storage
 def store_hash():
-    if hash1 is not None:
+    if hash1 is not None and file_path_global is not None:
         try:
-            # Store the hash in the Firestore array for the selected document type
+            # Store the hash in Firestore
             doc_ref = db.collection('campaign_one').document(document_type_var.get())
             doc_ref.update({
                 'hashes': firestore.ArrayUnion([str(hash1)])
             })
 
-            messagebox.showinfo("Info", "Hash stored successfully.")
+            # Upload the image to Firebase Storage
+            upload_image_to_storage(file_path_global, document_type_var.get(), str(hash1))
+
+            messagebox.showinfo("Info", "Hash stored and image uploaded successfully.")
         except Exception as e:
-            messagebox.showerror("Error", f"Error storing hash: {e}")
+            messagebox.showerror("Error", f"Error storing hash and uploading image: {e}")
     else:
         messagebox.showinfo("Info", "Please select an image before storing the hash.")
+
+# Function to upload an image to Firebase Storage
+def upload_image_to_storage(file_path, folder_name, image_hash):
+    # Extract the filename from the path
+    filename = f"{image_hash}.jpg"
+
+    # Create a path in Firebase Storage with the folder name
+    storage_path = f'campaign_one/{folder_name}/{filename}'
+
+    # Upload the image to Firebase Storage
+    blob = bucket.blob(storage_path)
+    blob.upload_from_filename(file_path)
+
+    print(f"Image uploaded to: {storage_path}")
+
+# Function to download and display the matching image from Firebase Storage
+def download_and_display_matching_image(matching_hash):
+    try:
+        folder_name = document_type_var.get()
+        filename = f"{matching_hash}.jpg"
+        storage_path = f'campaign_one/{folder_name}/{filename}'
+
+        # Download the image from Firebase Storage
+        blob = bucket.blob(storage_path)
+        downloaded_image = blob.download_as_bytes()
+
+        # Load the image using PIL
+        image = Image.open(io.BytesIO(downloaded_image))
+
+        # Resize the image to fit the display
+        image = image.resize((200, 200))
+        img = ImageTk.PhotoImage(image)
+
+        # Display the matching image
+        matching_image_label.config(image=img)
+        matching_image_label.image = img  # Keep a reference to avoid garbage collection
+        print(f"Downloaded and displayed matching image from: {storage_path}")
+    except Exception as e:
+        print(f"Error downloading image: {e}")
+        messagebox.showerror("Error", f"Error downloading matching image: {e}")
+
+# Function to display the uploaded image
+def display_uploaded_image(file_path):
+    try:
+        uploaded_image = Image.open(file_path)
+
+        # Resize the image to fit the display
+        uploaded_image = uploaded_image.resize((200, 200))
+        img = ImageTk.PhotoImage(uploaded_image)
+
+        # Display the uploaded image
+        uploaded_image_label.config(image=img)
+        uploaded_image_label.image = img  # Keep a reference to avoid garbage collection
+        print(f"Displayed uploaded image from: {file_path}")
+    except Exception as e:
+        print(f"Error displaying uploaded image: {e}")
+        messagebox.showerror("Error", f"Error displaying uploaded image: {e}")
 
 # Compare the newly generated hash with the stored ones in Firestore
 def compare_hashes():
@@ -126,8 +193,14 @@ def compare_hashes():
                         best_match = stored_hash_str
                         best_similarity = similarity_percentage
 
-                # Display the best match and its similarity percentage
-                result_label.config(text=f"Best match: {best_match}, Similarity: {best_similarity:.2f}%")
+                # Display the result of comparison
+                if best_similarity > 75:
+                    # Download and display the matching image from Firebase Storage
+                    download_and_display_matching_image(best_match)
+                    display_uploaded_image(file_path_global)
+                    result_label.config(text=f"Best match found with {best_similarity:.2f}% similarity : Hash: {best_match}")
+                else:
+                    result_label.config(text="No match found with > 75% similarity")
             else:
                 messagebox.showinfo("Info", "Selected document does not exist.")
         except Exception as e:
@@ -137,7 +210,7 @@ def compare_hashes():
 
 # Set up the GUI
 root = tk.Tk()
-root.title("Image Hashing and Firestore Storage with Vision AI")
+root.title("Image Hashing, Firestore, and Firebase Storage with Vision AI")
 
 # Hash type selection dropdown menu
 hash_type_var = tk.StringVar(value="phash")  # Default value
@@ -177,8 +250,16 @@ hash_label1.pack(pady=5)
 object_label = tk.Label(root, text="Detected Objects will be displayed here.")
 object_label.pack(pady=5)
 
-# Button to store the hash in Firestore
-store_button = tk.Button(root, text="Store Hash in Firestore", command=store_hash)
+# Label to display the uploaded image
+uploaded_image_label = tk.Label(root, text="Uploaded Image will be displayed here.")
+uploaded_image_label.pack(pady=5)
+
+# Label to display the matching image from Firebase Storage
+matching_image_label = tk.Label(root, text="Matching Image will be displayed here.")
+matching_image_label.pack(pady=5)
+
+# Button to store the hash in Firestore and upload the image to Storage
+store_button = tk.Button(root, text="Store Hash and Upload Image", command=store_hash)
 store_button.pack(pady=20)
 
 # Button to compare the new hash with stored hashes
@@ -190,5 +271,5 @@ result_label = tk.Label(root, text="Comparison result will be displayed here.")
 result_label.pack(pady=5)
 
 # Start the GUI event loop
-root.geometry("600x600")
+root.geometry("750x1000")
 root.mainloop()
