@@ -7,6 +7,9 @@ from firebase_admin import credentials, firestore, storage
 from google.cloud import vision
 import os
 import io
+import cv2
+import json
+import numpy as np
 
 # Initialize Firebase
 cred = credentials.Certificate('/Users/rosshartigan/Nelson Development/Motion Ads/pHash-Python-Project/firebase credentials/motion-hash-tester-firebase-adminsdk-qgyxp-2782717ee6.json')
@@ -20,7 +23,7 @@ bucket = storage.bucket()
 # Global variables to store the hash of the selected image and detected objects
 hash1 = None
 detected_objects = []
-file_path_global = None  # Store the path of the selected image
+file_path_global = None
 
 # Function to generate different types of hashes
 def generate_hash(image, hash_type='phash'):
@@ -48,13 +51,8 @@ def localize_objects(path):
     objects = client.object_localization(image=image).localized_object_annotations
 
     detected_objects = []  # Reset detected objects
-    print(f"Number of objects found: {len(objects)}")
     for object_ in objects:
         detected_objects.append(f"{object_.name} (confidence: {object_.score:.2f})")
-        print(f"\n{object_.name} (confidence: {object_.score:.2f})")
-        print("Normalized bounding polygon vertices: ")
-        for vertex in object_.bounding_poly.normalized_vertices:
-            print(f" - ({vertex.x}, {vertex.y})")
 
 # Load and hash the selected image based on hash type
 def load_and_hash_image(hash_type='phash'):
@@ -93,20 +91,62 @@ def load_and_hash_image(hash_type='phash'):
 def store_hash():
     if hash1 is not None and file_path_global is not None:
         try:
-            # Store the hash in Firestore
+            # Generate ORB descriptors for the uploaded image
+            img = Image.open(file_path_global)
+            orb_keypoints, orb_descriptors = extract_orb_descriptors(img)
+            
+            # Store ORB descriptors as JSON file in Firebase Storage
+            orb_file_path = store_orb_descriptors(orb_descriptors, document_type_var.get(), str(hash1))
+
+            # Store the hash and ORB file link in Firestore
             doc_ref = db.collection('campaign_one').document(document_type_var.get())
             doc_ref.update({
-                'hashes': firestore.ArrayUnion([str(hash1)])
+                'hashes': firestore.ArrayUnion([str(hash1)]),
+                'orb_links': firestore.ArrayUnion([orb_file_path])
             })
 
             # Upload the image to Firebase Storage
             upload_image_to_storage(file_path_global, document_type_var.get(), str(hash1))
 
-            messagebox.showinfo("Info", "Hash stored and image uploaded successfully.")
+            messagebox.showinfo("Info", "Hash and ORB descriptors stored and image uploaded successfully.")
         except Exception as e:
-            messagebox.showerror("Error", f"Error storing hash and uploading image: {e}")
+            messagebox.showerror("Error", f"Error storing hash and ORB descriptors: {e}")
     else:
         messagebox.showinfo("Info", "Please select an image before storing the hash.")
+
+# Extract ORB descriptors from an image
+def extract_orb_descriptors(image):
+    # Convert the image to grayscale
+    image_cv = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2GRAY)
+    
+    # Initialize ORB detector
+    orb = cv2.ORB_create()
+
+    # Detect keypoints and descriptors
+    keypoints, descriptors = orb.detectAndCompute(image_cv, None)
+
+    return keypoints, descriptors
+
+# Store ORB descriptors as a JSON file in Firebase Storage
+def store_orb_descriptors(orb_descriptors, folder_name, image_hash):
+    orb_filename = f"{image_hash}_orb.json"
+
+    # Create a path in Firebase Storage with the folder name
+    storage_path = f'campaign_one/ORB/{folder_name}/{orb_filename}'
+
+    # Convert the ORB descriptors to a JSON-serializable format
+    orb_data = orb_descriptors.tolist()  # Convert numpy array to list
+
+    # Save ORB data to a JSON file locally
+    local_orb_file_path = f"/tmp/{orb_filename}"
+    with open(local_orb_file_path, 'w') as orb_file:
+        json.dump(orb_data, orb_file)
+
+    # Upload the ORB JSON file to Firebase Storage
+    blob = bucket.blob(storage_path)
+    blob.upload_from_filename(local_orb_file_path)
+
+    return storage_path
 
 # Function to upload an image to Firebase Storage
 def upload_image_to_storage(file_path, folder_name, image_hash):
@@ -120,14 +160,13 @@ def upload_image_to_storage(file_path, folder_name, image_hash):
     blob = bucket.blob(storage_path)
     blob.upload_from_filename(file_path)
 
-    print(f"Image uploaded to: {storage_path}")
-
 # Function to download and display the matching image from Firebase Storage
 def download_and_display_matching_image(matching_hash):
     try:
         folder_name = document_type_var.get()
+        # Using only the hash to fetch the image, no _orb.json suffix
         filename = f"{matching_hash}.jpg"
-        storage_path = f'campaign_one/{folder_name}/{filename}'
+        storage_path = f'campaign_one/{folder_name}/{filename}'  # Fetch the image based on hash, no ORB
 
         # Download the image from Firebase Storage
         blob = bucket.blob(storage_path)
@@ -143,27 +182,10 @@ def download_and_display_matching_image(matching_hash):
         # Display the matching image
         matching_image_label.config(image=img)
         matching_image_label.image = img  # Keep a reference to avoid garbage collection
-        print(f"Downloaded and displayed matching image from: {storage_path}")
+
     except Exception as e:
         print(f"Error downloading image: {e}")
         messagebox.showerror("Error", f"Error downloading matching image: {e}")
-
-# Function to display the uploaded image
-def display_uploaded_image(file_path):
-    try:
-        uploaded_image = Image.open(file_path)
-
-        # Resize the image to fit the display
-        uploaded_image = uploaded_image.resize((200, 200))
-        img = ImageTk.PhotoImage(uploaded_image)
-
-        # Display the uploaded image
-        uploaded_image_label.config(image=img)
-        uploaded_image_label.image = img  # Keep a reference to avoid garbage collection
-        print(f"Displayed uploaded image from: {file_path}")
-    except Exception as e:
-        print(f"Error displaying uploaded image: {e}")
-        messagebox.showerror("Error", f"Error displaying uploaded image: {e}")
 
 # Compare the newly generated hash with the stored ones in Firestore
 def compare_hashes():
@@ -175,6 +197,8 @@ def compare_hashes():
 
             if doc.exists:
                 stored_hashes = doc.to_dict().get('hashes', [])
+                orb_links = doc.to_dict().get('orb_links', [])
+
                 if not stored_hashes:
                     messagebox.showinfo("Info", "No hashes stored for this document type.")
                     return
@@ -193,20 +217,87 @@ def compare_hashes():
                         best_match = stored_hash_str
                         best_similarity = similarity_percentage
 
-                # Display the result of comparison
+                # If hash similarity is found with > 75% similarity
                 if best_similarity > 75:
-                    # Download and display the matching image from Firebase Storage
+                    # Use the best match hash to download and display the image
                     download_and_display_matching_image(best_match)
                     display_uploaded_image(file_path_global)
                     result_label.config(text=f"Best match found with {best_similarity:.2f}% similarity : Hash: {best_match}")
                 else:
-                    result_label.config(text="No match found with > 75% similarity")
+                    # Fall back to ORB comparison if hash similarity < 75%
+                    orb_similarity, best_orb_match = compare_orb_with_stored_images(orb_links, file_path_global)
+
+                    if best_orb_match:
+                        result_label.config(text=f"Best ORB match found with {orb_similarity:.2f}% similarity.")
+                        # Use the best ORB match hash to download and display the image
+                        download_and_display_matching_image(best_orb_match)
+                    else:
+                        result_label.config(text="No close match found using ORB descriptors.")
             else:
                 messagebox.showinfo("Info", "Selected document does not exist.")
         except Exception as e:
             messagebox.showerror("Error", f"Error comparing hashes: {e}")
     else:
         messagebox.showinfo("Info", "Please select an image before comparing hashes.")
+        
+        
+# Function to compare ORB descriptors with stored ORB descriptors
+def compare_orb_with_stored_images(orb_links, uploaded_image_path):
+    best_match = None
+    best_similarity = 0
+
+    # Extract ORB descriptors for the newly uploaded image
+    uploaded_image = Image.open(uploaded_image_path)
+    _, orb_descriptors_new = extract_orb_descriptors(uploaded_image)
+
+    if orb_descriptors_new is None:
+        print("No ORB descriptors found in the new image.")
+        return None, 0
+
+    # Compare with each ORB link in Firebase Storage
+    for orb_link in orb_links:
+        try:
+            # Download ORB descriptor file from Firebase Storage
+            blob = bucket.blob(orb_link)
+            downloaded_orb_data = blob.download_as_bytes()
+            orb_descriptors_stored = json.loads(downloaded_orb_data)
+
+            # Convert the stored descriptors back to numpy array
+            orb_descriptors_stored = np.array(orb_descriptors_stored, dtype=np.uint8)
+
+            # Perform ORB descriptor matching
+            bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
+            matches = bf.match(orb_descriptors_new, orb_descriptors_stored)
+
+            # Calculate ORB matching percentage
+            orb_similarity = len(matches) / min(len(orb_descriptors_new), len(orb_descriptors_stored)) * 100
+
+            if orb_similarity > best_similarity:
+                best_similarity = orb_similarity
+                # Use the hash (from orb_link) for fetching the image, strip out "_orb.json"
+                best_match = orb_link.split('/')[-1].replace('_orb.json', '')
+
+        except Exception as e:
+            print(f"Error downloading or comparing ORB descriptors: {e}")
+
+    return best_similarity, best_match
+
+
+# Function to display the uploaded image
+def display_uploaded_image(file_path):
+    try:
+        uploaded_image = Image.open(file_path)
+
+        # Resize the image to fit the display
+        uploaded_image = uploaded_image.resize((200, 200))
+        img = ImageTk.PhotoImage(uploaded_image)
+
+        # Display the uploaded image
+        uploaded_image_label.config(image=img)
+        uploaded_image_label.image = img  # Keep a reference to avoid garbage collection
+    except Exception as e:
+        print(f"Error displaying uploaded image: {e}")
+        messagebox.showerror("Error", f"Error displaying uploaded image: {e}")
 
 # Set up the GUI
 root = tk.Tk()
