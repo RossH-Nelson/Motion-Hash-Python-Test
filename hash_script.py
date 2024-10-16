@@ -2,6 +2,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox
 from PIL import Image, ImageTk
 import imagehash
+import random
 import firebase_admin
 from firebase_admin import credentials, firestore, storage
 from google.cloud import vision
@@ -20,7 +21,22 @@ bucket = storage.bucket()
 # Global variables to store the hash of the selected image and detected objects
 hash1 = None
 detected_objects = []
-file_path_global = None  # Store the path of the selected image
+file_path_global = None
+original_hash = None
+
+# Global counters for read and write operations
+read_count = 0
+write_count = 0
+
+def increment_read():
+    global read_count
+    read_count += 1
+    print(f"Total reads: {read_count}")
+
+def increment_write():
+    global write_count
+    write_count += 1
+    print(f"Total writes: {write_count}")
 
 # Function to generate different types of hashes
 def generate_hash(image, hash_type='phash'):
@@ -89,15 +105,16 @@ def load_and_hash_image(hash_type='phash'):
     else:
         messagebox.showinfo("Info", "No file selected.")
 
-# Store the hash in Firestore and upload the image to Firebase Storage
+# Modify the function where you perform Firestore writes
 def store_hash():
     if hash1 is not None and file_path_global is not None:
         try:
-            # Store the hash in Firestore
+            # Store the hash in Firestore (this is a write operation)
             doc_ref = db.collection('campaign_one').document(document_type_var.get())
             doc_ref.update({
                 'hashes': firestore.ArrayUnion([str(hash1)])
             })
+            increment_write()  # Log the write operation
 
             # Upload the image to Firebase Storage
             upload_image_to_storage(file_path_global, document_type_var.get(), str(hash1))
@@ -165,13 +182,15 @@ def display_uploaded_image(file_path):
         print(f"Error displaying uploaded image: {e}")
         messagebox.showerror("Error", f"Error displaying uploaded image: {e}")
 
-# Compare the newly generated hash with the stored ones in Firestore
+# Modify the function where you perform Firestore reads
 def compare_hashes():
+    global read_count
     if hash1 is not None:
         try:
-            # Get the selected document from Firestore
+            # Get the selected document from Firestore (this is a read operation)
             doc_ref = db.collection('campaign_one').document(document_type_var.get())
             doc = doc_ref.get()
+            increment_read()  # Log the read operation
 
             if doc.exists:
                 stored_hashes = doc.to_dict().get('hashes', [])
@@ -182,7 +201,7 @@ def compare_hashes():
                 best_match = None
                 best_similarity = 0
 
-                # Compare the newly generated hash with each stored hash
+                # Compare the newly generated hash with each stored hash (additional read operations might occur here)
                 for stored_hash_str in stored_hashes:
                     stored_hash = imagehash.hex_to_hash(stored_hash_str)
                     hamming_distance = hash1 - stored_hash
@@ -195,10 +214,9 @@ def compare_hashes():
 
                 # Display the result of comparison
                 if best_similarity > 75:
-                    # Download and display the matching image from Firebase Storage
                     download_and_display_matching_image(best_match)
                     display_uploaded_image(file_path_global)
-                    result_label.config(text=f"Best match found with {best_similarity:.2f}% similarity : Hash: {best_match}")
+                    result_label.config(text=f"Best match found with {best_similarity:.2f}% similarity")
                 else:
                     result_label.config(text="No match found with > 75% similarity")
             else:
