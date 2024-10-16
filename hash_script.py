@@ -6,11 +6,14 @@ import random
 import firebase_admin
 from firebase_admin import credentials, firestore, storage
 from google.cloud import vision
+import numpy as np
+import cv2  # OpenCV for ORB feature detection
 import os
 import io
 
 # Initialize Firebase
 cred = credentials.Certificate('/Users/rosshartigan/Nelson Development/Motion Ads/pHash-Python-Project/firebase credentials/motion-hash-tester-firebase-adminsdk-qgyxp-2782717ee6.json')
+# Update the path to your Firebase credentials
 firebase_admin.initialize_app(cred, {
     'storageBucket': 'motion-hash-tester.appspot.com'
 })
@@ -18,8 +21,9 @@ firebase_admin.initialize_app(cred, {
 db = firestore.client()
 bucket = storage.bucket()
 
-# Global variables to store the hash of the selected image and detected objects
+# Global variables to store the hash, ORB descriptors, and detected objects
 hash1 = None
+orb_descriptors = None
 detected_objects = []
 file_path_global = None
 original_hash = None
@@ -27,6 +31,9 @@ original_hash = None
 # Global counters for read and write operations
 read_count = 0
 write_count = 0
+
+# ORB detector
+orb = cv2.ORB_create()
 
 def increment_read():
     global read_count
@@ -72,9 +79,48 @@ def localize_objects(path):
         for vertex in object_.bounding_poly.normalized_vertices:
             print(f" - ({vertex.x}, {vertex.y})")
 
+# ORB feature matching
+def orb_feature_matching(image1, image2):
+    image1_cv = cv2.cvtColor(np.array(image1), cv2.COLOR_RGB2GRAY)
+    image2_cv = cv2.cvtColor(np.array(image2), cv2.COLOR_RGB2GRAY)
+
+    kp1, des1 = orb.detectAndCompute(image1_cv, None)
+    kp2, des2 = orb.detectAndCompute(image2_cv, None)
+
+    bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
+    matches = bf.match(des1, des2)
+    matches = sorted(matches, key=lambda x: x.distance)
+
+    matching_score = len(matches) / min(len(kp1), len(kp2)) * 100
+    return matching_score
+
+# Store hash and ORB descriptors in Firestore and upload the image to Firebase Storage
+def store_orb_features():
+    if hash1 is not None and orb_descriptors is not None and file_path_global is not None:
+        try:
+            # Convert ORB descriptors to a Firestore-compatible format (flatten and convert to list)
+            orb_descriptors_list = orb_descriptors.tolist()
+
+            # Store the hash and ORB descriptors in Firestore (this is a write operation)
+            doc_ref = db.collection('campaign_one').document(document_type_var.get())
+            doc_ref.update({
+                'hashes': firestore.ArrayUnion([str(hash1)]),
+                'orb_descriptors': orb_descriptors_list  # Store flattened ORB descriptors
+            })
+            increment_write()  # Log the write operation
+
+            # Upload the image to Firebase Storage
+            upload_image_to_storage(file_path_global, document_type_var.get(), str(hash1))
+
+            messagebox.showinfo("Info", "Hash, ORB descriptors stored and image uploaded successfully.")
+        except Exception as e:
+            messagebox.showerror("Error", f"Error storing hash, ORB descriptors, and uploading image: {e}")
+    else:
+        messagebox.showinfo("Info", "Please select an image before storing.")
+
 # Load and hash the selected image based on hash type
 def load_and_hash_image(hash_type='phash'):
-    global hash1, file_path_global
+    global hash1, orb_descriptors, file_path_global
 
     # Open a file dialog to select an image
     file_path = filedialog.askopenfilename(
@@ -90,6 +136,10 @@ def load_and_hash_image(hash_type='phash'):
             # Generate the selected hash type
             hash1 = generate_hash(img, hash_type)
 
+            # Extract ORB descriptors
+            img_cv = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2GRAY)
+            _, orb_descriptors = orb.detectAndCompute(img_cv, None)
+
             # Save the image path to a global variable for future storage
             file_path_global = file_path
 
@@ -104,26 +154,6 @@ def load_and_hash_image(hash_type='phash'):
             messagebox.showerror("Error", f"Error loading image: {e}")
     else:
         messagebox.showinfo("Info", "No file selected.")
-
-# Modify the function where you perform Firestore writes
-def store_hash():
-    if hash1 is not None and file_path_global is not None:
-        try:
-            # Store the hash in Firestore (this is a write operation)
-            doc_ref = db.collection('campaign_one').document(document_type_var.get())
-            doc_ref.update({
-                'hashes': firestore.ArrayUnion([str(hash1)])
-            })
-            increment_write()  # Log the write operation
-
-            # Upload the image to Firebase Storage
-            upload_image_to_storage(file_path_global, document_type_var.get(), str(hash1))
-
-            messagebox.showinfo("Info", "Hash stored and image uploaded successfully.")
-        except Exception as e:
-            messagebox.showerror("Error", f"Error storing hash and uploading image: {e}")
-    else:
-        messagebox.showinfo("Info", "Please select an image before storing the hash.")
 
 # Function to upload an image to Firebase Storage
 def upload_image_to_storage(file_path, folder_name, image_hash):
@@ -165,22 +195,26 @@ def download_and_display_matching_image(matching_hash):
         print(f"Error downloading image: {e}")
         messagebox.showerror("Error", f"Error downloading matching image: {e}")
 
-# Function to display the uploaded image
-def display_uploaded_image(file_path):
-    try:
-        uploaded_image = Image.open(file_path)
+# Function to compare ORB descriptors using FLANN-based matching
+def compare_orb_descriptors(new_descriptors, stored_descriptors):
+    # FLANN-based matching parameters
+    index_params = dict(algorithm=6, table_number=6, key_size=12, multi_probe_level=1)
+    search_params = dict(checks=50)
+    flann = cv2.FlannBasedMatcher(index_params, search_params)
 
-        # Resize the image to fit the display
-        uploaded_image = uploaded_image.resize((200, 200))
-        img = ImageTk.PhotoImage(uploaded_image)
+    matches = flann.knnMatch(new_descriptors, stored_descriptors, k=2)
+    good_matches = []
 
-        # Display the uploaded image
-        uploaded_image_label.config(image=img)
-        uploaded_image_label.image = img  # Keep a reference to avoid garbage collection
-        print(f"Displayed uploaded image from: {file_path}")
-    except Exception as e:
-        print(f"Error displaying uploaded image: {e}")
-        messagebox.showerror("Error", f"Error displaying uploaded image: {e}")
+    for m, n in matches:
+        if m.distance < 0.7 * n.distance:
+            good_matches.append(m)
+
+    matching_score = len(good_matches) / len(new_descriptors) * 100
+    return matching_score
+
+# Function to convert stored ORB descriptors back to numpy array for comparison
+def get_orb_descriptors_from_firestore(stored_descriptors_list):
+    return np.array(stored_descriptors_list, dtype=np.uint8)
 
 # Modify the function where you perform Firestore reads
 def compare_hashes():
@@ -194,14 +228,17 @@ def compare_hashes():
 
             if doc.exists:
                 stored_hashes = doc.to_dict().get('hashes', [])
+                stored_orb_descriptors_list = doc.to_dict().get('orb_descriptors', [])
+
                 if not stored_hashes:
                     messagebox.showinfo("Info", "No hashes stored for this document type.")
                     return
 
                 best_match = None
                 best_similarity = 0
+                best_orb_similarity = 0
 
-                # Compare the newly generated hash with each stored hash (additional read operations might occur here)
+                # Compare the newly generated hash with each stored hash
                 for stored_hash_str in stored_hashes:
                     stored_hash = imagehash.hex_to_hash(stored_hash_str)
                     hamming_distance = hash1 - stored_hash
@@ -212,13 +249,17 @@ def compare_hashes():
                         best_match = stored_hash_str
                         best_similarity = similarity_percentage
 
+                # Compare ORB descriptors using FLANN
+                stored_orb_descriptors = get_orb_descriptors_from_firestore(stored_orb_descriptors_list)
+                orb_similarity = compare_orb_descriptors(orb_descriptors, stored_orb_descriptors)
+
+                if orb_similarity > best_orb_similarity:
+                    best_orb_similarity = orb_similarity
+
                 # Display the result of comparison
-                if best_similarity > 75:
-                    download_and_display_matching_image(best_match)
-                    display_uploaded_image(file_path_global)
-                    result_label.config(text=f"Best match found with {best_similarity:.2f}% similarity")
-                else:
-                    result_label.config(text="No match found with > 75% similarity")
+                download_and_display_matching_image(best_match)
+                display_uploaded_image(file_path_global)
+                result_label.config(text=f"Best match: Hash {best_similarity:.2f}%, ORB {best_orb_similarity:.2f}%")
             else:
                 messagebox.showinfo("Info", "Selected document does not exist.")
         except Exception as e:
@@ -228,7 +269,7 @@ def compare_hashes():
 
 # Set up the GUI
 root = tk.Tk()
-root.title("Image Hashing, Firestore, and Firebase Storage with Vision AI")
+root.title("Image Hashing, Firestore, and Firebase Storage with Vision AI and ORB")
 
 # Hash type selection dropdown menu
 hash_type_var = tk.StringVar(value="phash")  # Default value
@@ -277,7 +318,7 @@ matching_image_label = tk.Label(root, text="Matching Image will be displayed her
 matching_image_label.pack(pady=5)
 
 # Button to store the hash in Firestore and upload the image to Storage
-store_button = tk.Button(root, text="Store Hash and Upload Image", command=store_hash)
+store_button = tk.Button(root, text="Store Hash and Upload Image", command=store_orb_features)
 store_button.pack(pady=20)
 
 # Button to compare the new hash with stored hashes
