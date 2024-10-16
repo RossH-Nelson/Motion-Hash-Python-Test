@@ -98,14 +98,14 @@ def orb_feature_matching(image1, image2):
 def store_orb_features():
     if hash1 is not None and orb_descriptors is not None and file_path_global is not None:
         try:
-            # Convert ORB descriptors to a Firestore-compatible format (flatten and convert to list)
-            orb_descriptors_list = orb_descriptors.tolist()
+            # Convert ORB descriptors to a Firestore-compatible format (store each descriptor as a dictionary)
+            orb_descriptors_list = [descriptor.tolist() for descriptor in orb_descriptors]
 
             # Store the hash and ORB descriptors in Firestore (this is a write operation)
             doc_ref = db.collection('campaign_one').document(document_type_var.get())
             doc_ref.update({
                 'hashes': firestore.ArrayUnion([str(hash1)]),
-                'orb_descriptors': orb_descriptors_list  # Store flattened ORB descriptors
+                'orb_descriptors': orb_descriptors_list  # Store ORB descriptors as a list of lists
             })
             increment_write()  # Log the write operation
 
@@ -229,7 +229,6 @@ def compare_hashes():
             if doc.exists:
                 stored_hashes = doc.to_dict().get('hashes', [])
                 stored_orb_descriptors_list = doc.to_dict().get('orb_descriptors', [])
-
                 if not stored_hashes:
                     messagebox.showinfo("Info", "No hashes stored for this document type.")
                     return
