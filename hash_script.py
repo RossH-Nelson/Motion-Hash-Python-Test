@@ -212,13 +212,13 @@ def compare_hashes():
                         best_match = stored_hash_str
                         best_similarity = similarity_percentage
 
-                # Display the result of comparison
-                if best_similarity > 75:
+                # Always display the best match, regardless of the similarity percentage
+                if best_match:
                     download_and_display_matching_image(best_match)
                     display_uploaded_image(file_path_global)
                     result_label.config(text=f"Best match found with {best_similarity:.2f}% similarity")
                 else:
-                    result_label.config(text="No match found with > 75% similarity")
+                    result_label.config(text="No match found.")
             else:
                 messagebox.showinfo("Info", "Selected document does not exist.")
         except Exception as e:
