@@ -4,9 +4,9 @@ from PIL import Image, ImageTk
 import imagehash
 import random
 import numpy as np
-from skimage.metrics import structural_similarity as ssim
 from PIL import ImageOps
 import cv2  # OpenCV for ORB feature detection
+import hashlib
 
 # Global variables to store the hash and original image
 original_hash = None
@@ -15,7 +15,7 @@ orb = cv2.ORB_create()  # Initialize ORB detector
 orb_descriptors_original = None  # To store the ORB descriptors of the original image
 orb_descriptors_second = None  # To store the ORB descriptors of the second image
 
-#np.set_printoptions(threshold=np.inf) 
+np.set_printoptions(threshold=np.inf)
 
 # Function to generate different types of hashes
 def generate_hash(image, hash_type='phash'):
@@ -28,13 +28,26 @@ def generate_hash(image, hash_type='phash'):
     elif hash_type == 'whash':
         return imagehash.whash(image)
 
-# Calculate SSIM between two images
-def calculate_ssim(image1, image2):
-    image2 = ImageOps.fit(image2, image1.size)  # Ensure the same dimensions
-    image1 = np.array(image1.convert('L'))  # Convert to grayscale
-    image2 = np.array(image2.convert('L'))  # Convert to grayscale
-    similarity, _ = ssim(image1, image2, full=True)
-    return similarity
+# Convert ORB descriptors to bit string
+def orb_descriptors_to_bitstring(descriptors):
+    bitstrings = []
+    for descriptor in descriptors:
+        bitstring = ''.join(format(byte, '08b') for byte in descriptor)  # Convert each byte to 8-bit binary string
+        bitstrings.append(bitstring)
+    return bitstrings
+
+# Generate a SHA-256 hash from concatenated ORB descriptors
+def orb_descriptors_to_sha256(descriptors):
+    bitstrings = orb_descriptors_to_bitstring(descriptors)
+    concatenated_bits = ''.join(bitstrings)  # Concatenate all keypoints
+    hash_object = hashlib.sha256(concatenated_bits.encode())
+    return hash_object.hexdigest()
+
+# Compute Hamming distance between two hash strings
+def hamming_distance(hash1, hash2):
+    bin_hash1 = bin(int(hash1, 16))[2:].zfill(256)  # Convert hash to binary
+    bin_hash2 = bin(int(hash2, 16))[2:].zfill(256)
+    return sum(c1 != c2 for c1, c2 in zip(bin_hash1, bin_hash2))
 
 # ORB feature matching and logging keypoints/descriptors
 def orb_feature_matching(image1, image2):
@@ -47,30 +60,37 @@ def orb_feature_matching(image1, image2):
     kp1, des1 = orb.detectAndCompute(image1_cv, None)
     kp2, des2 = orb.detectAndCompute(image2_cv, None)
 
-    if des1 is not None:
-        print("\nORB Descriptors for Original Image:")
-        print(des1)
-    if des2 is not None:
-        print("\nORB Descriptors for Second Image:")
-        print(des2)
+    if des1 is not None and des2 is not None:
+        # Generate SHA-256 hashes from ORB descriptors for both images
+        hash_original = orb_descriptors_to_sha256(des1)
+        hash_second = orb_descriptors_to_sha256(des2)
 
-    # Store the descriptors for the second image comparison
-    orb_descriptors_original = des1
-    orb_descriptors_second = des2
+        # Compute the Hamming distance between the two hashes
+        hamming_dist = hamming_distance(hash_original, hash_second)
+        hamming_similarity = (1 - hamming_dist / 256) * 100  # Convert to percentage
+        
+        print(f"Hash for Original Image: {hash_original}")
+        print(f"Hash for Second Image: {hash_second}")
+        print(f"Hamming Distance: {hamming_dist}")
+        print(f"Hamming-based Similarity: {hamming_similarity:.2f}%")
 
-    # Match descriptors using the BFMatcher
-    bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
-    matches = bf.match(des1, des2)
+        # ORB matching
+        bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
+        matches = bf.match(des1, des2)
 
-    # Sort matches based on distance (best matches first)
-    matches = sorted(matches, key=lambda x: x.distance)
+        # Sort matches based on distance (best matches first)
+        matches = sorted(matches, key=lambda x: x.distance)
 
-    # Calculate matching percentage based on number of good matches
-    matching_score = len(matches) / min(len(kp1), len(kp2)) * 100
-    return matching_score
+        # Calculate ORB matching percentage based on number of good matches
+        orb_similarity = len(matches) / min(len(kp1), len(kp2)) * 100
+
+        return orb_similarity, hamming_similarity
+    else:
+        return None, None
 
 # Apply 4 random crops and 4 random rotations (2 mild, 2 extensive for each)
 def apply_transformations(img, hash_type):
+    global original_img
     transformed_images = []
     similarity_results = []
     width, height = img.size
@@ -103,41 +123,40 @@ def apply_transformations(img, hash_type):
         rotated_img = img.rotate(angle)
         transformed_images.append(rotated_img)
 
-    # Calculate hashes and SSIM for the transformations
+    # Calculate hashes, and ORB similarity for the transformations
     for transformed_img in transformed_images:
         transformed_hash = generate_hash(transformed_img, hash_type)
         hamming_distance = original_hash - transformed_hash
         total_bits = len(bin(int(str(original_hash), 16))) - 2
         hash_similarity_percentage = (1 - hamming_distance / total_bits) * 100
 
-        ssim_similarity = calculate_ssim(img, transformed_img)
+        # ORB similarity between original image and transformed image
+        orb_similarity, _ = orb_feature_matching(original_img, transformed_img)
 
-        similarity_results.append((transformed_img, transformed_hash, hash_similarity_percentage, ssim_similarity))
+        similarity_results.append((transformed_img, transformed_hash, hash_similarity_percentage, orb_similarity))
 
     return similarity_results
 
-# Display transformations and log similarities (no ORB for transformations)
+# Display transformations and log similarities (including ORB for transformations)
 def display_transformations(original_img, similarity_results, container):
-    original_img = original_img.resize((300, 300))
-    img_tk = ImageTk.PhotoImage(original_img)
-    label = tk.Label(container, image=img_tk)
-    label.image = img_tk
+    original_img_tk = ImageTk.PhotoImage(original_img)  # No resizing here, use original size
+    label = tk.Label(container, image=original_img_tk)
+    label.image = original_img_tk
     label.grid(row=1, column=0, columnspan=2, pady=10)
 
     original_hash_label = tk.Label(container, text=f"Original Hash: {original_hash}")
     original_hash_label.grid(row=2, column=0, columnspan=2)
 
-    # Display the transformed images and log similarities (no ORB for transformations)
-    for i, (img, img_hash, hash_similarity, ssim_similarity) in enumerate(similarity_results):
-        img = img.resize((200, 200))
-        img_tk = ImageTk.PhotoImage(img)
-
+    # Display the transformed images and log similarities (including ORB for transformations)
+    for i, (img, img_hash, hash_similarity, orb_similarity) in enumerate(similarity_results):
+        img_tk = ImageTk.PhotoImage(img)  # Do not resize here either
         label = tk.Label(container, image=img_tk)
         label.image = img_tk
         label.grid(row=(i // 2) + 3, column=(i % 2) * 2)
 
-        hash_label = tk.Label(container, text=f"Hash: {img_hash}\nHash Sim: {hash_similarity:.2f}%\nSSIM: {ssim_similarity:.2f}")
+        hash_label = tk.Label(container, text=f"Hash: {img_hash}\nHash Sim: {hash_similarity:.2f}%\nORB Sim: {orb_similarity:.2f}%")
         hash_label.grid(row=(i // 2) + 3, column=(i % 2) * 2 + 1)
+
 
 # Load and transform the selected image
 def load_and_transform_image(hash_type='phash'):
@@ -168,7 +187,7 @@ def load_and_transform_image(hash_type='phash'):
     else:
         messagebox.showinfo("Info", "No file selected.")
 
-# Upload and compare second image and log ORB data
+# Upload and compare second image and log ORB and hash data
 def upload_and_compare_second_image():
     global original_img, orb_descriptors_second
 
@@ -180,20 +199,43 @@ def upload_and_compare_second_image():
 
     if second_image_path:
         try:
+            # Load second image
             second_img = Image.open(second_image_path)
-            ssim_similarity = calculate_ssim(original_img, second_img)
-            orb_similarity = orb_feature_matching(original_img, second_img)
 
-            result_label.config(text=f"Second Image: SSIM: {ssim_similarity:.2f}, ORB Sim: {orb_similarity:.2f}%")
+            # Compute ORB and Hamming similarities
+            orb_similarity, hamming_similarity = orb_feature_matching(original_img, second_img)
+
+            # Clear any existing second image or text
+            for widget in canvas_frame.winfo_children():
+                if isinstance(widget, tk.Label) and 'Second Image' in widget.cget('text'):
+                    widget.destroy()
+
+            # Display second image without resizing
+            img_tk_second = ImageTk.PhotoImage(second_img)
+            second_img_label = tk.Label(canvas_frame, image=img_tk_second)
+            second_img_label.image = img_tk_second  # Keep a reference to avoid garbage collection
+            second_img_label.grid(row=2, column=2, padx=10, pady=10)
+
+            # Ensure ORB and Hamming similarities are computed
+            if orb_similarity is not None and hamming_similarity is not None:
+                # Display ORB and Hamming similarities below the second image
+                second_img_text = f"Second Image: ORB Sim: {orb_similarity:.2f}%, Hamming Sim: {hamming_similarity:.2f}%"
+                second_img_label_text = tk.Label(canvas_frame, text=second_img_text)
+                second_img_label_text.grid(row=3, column=2, padx=10, pady=5)
+            else:
+                second_img_label_text = tk.Label(canvas_frame, text="Unable to compute similarities")
+                second_img_label_text.grid(row=3, column=2, padx=10, pady=5)
 
         except Exception as e:
             messagebox.showerror("Error", f"Error comparing images: {e}")
     else:
         messagebox.showinfo("Info", "No second image selected.")
 
+
+
 # Set up the GUI
 root = tk.Tk()
-root.title("Image Transformations, Hash, SSIM, and ORB Similarity")
+root.title("Image Transformations, Hash, and ORB Similarity")
 
 canvas = tk.Canvas(root)
 canvas.pack(side="left", fill="both", expand=True)
