@@ -7,7 +7,7 @@ import firebase_admin
 from firebase_admin import credentials, firestore, storage
 from google.cloud import vision
 import numpy as np
-import cv2  # OpenCV for ORB feature detection
+import cv2  
 import os
 import io
 
