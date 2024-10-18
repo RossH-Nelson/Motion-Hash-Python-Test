@@ -62,7 +62,7 @@ def orb_similarity(img1, img2):
         return 0
 
     # Calculate similarity based on the number of good matches
-    good_matches = [m for m in matches if m.distance < 40]  # Using a distance threshold to filter good matches
+    good_matches = [m for m in matches if m.distance < 42]  # Using a distance threshold to filter good matches
 
     # Similarity percentage is based on the ratio of good matches to the minimum number of keypoints
     similarity_percentage = len(good_matches) / min(len(kp1), len(kp2)) * 100
