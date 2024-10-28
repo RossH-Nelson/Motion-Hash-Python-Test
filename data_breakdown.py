@@ -5,7 +5,7 @@ from PIL import Image
 import imagehash
 from openpyxl import Workbook
 from openpyxl.styles import PatternFill
-from openpyxl.utils import get_column_letter
+import time
 
 # Function to apply transformations (crops and rotations)
 def apply_transformations(img):
@@ -123,13 +123,18 @@ def process_images(image_folder, random_image_folder, output_xlsx):
               "Random Image 5 pHash %", "Random Image 5 ORB %"]
 
     ws.append(header)
+
+    # Initialize start time
+    start_time = time.time()
     
     # Process each image in the folder
-    for image_file in image_files:
+    for idx, image_file in enumerate(image_files):
+        print(f"Processing image {idx + 1} of {len(image_files)}: {image_file}")
         img_path = os.path.join(image_folder, image_file)
         img = cv2.imread(img_path)
         
         if img is None:
+            print(f"Failed to load image: {image_file}")
             continue
         
         # Apply transformations
@@ -138,31 +143,38 @@ def process_images(image_folder, random_image_folder, output_xlsx):
         # Collect results for a single row
         row = [image_file]
         
-        for transformed_img, _ in transformations:
+        for t_idx, (transformed_img, transform_name) in enumerate(transformations):
+            print(f"  Applying transformation {t_idx + 1}/{len(transformations)}: {transform_name}")
+
             # Calculate pHash similarity
             phash_sim = phash_similarity(img, transformed_img)
             
             # Calculate ORB similarity using keypoint matching
             orb_sim = orb_similarity(img, transformed_img)
             
-            # Append results to the row (just the numbers now)
+            # Append results to the row
             row.extend([round(phash_sim * 100, 2), round(orb_sim, 2)])
 
         # Add comparisons with each random image
-        for random_image_file in random_image_files:
+        for r_idx, random_image_file in enumerate(random_image_files):
             random_img_path = os.path.join(random_image_folder, random_image_file)
             random_img = cv2.imread(random_img_path)
             
             if random_img is None:
+                print(f"  Failed to load random image: {random_image_file}")
                 continue
             
+            print(f"  Comparing with random image {r_idx + 1} of {len(random_image_files)}: {random_image_file}")
             phash_random_sim = phash_similarity(img, random_img)
             orb_random_sim = orb_similarity(img, random_img)
             row.extend([round(phash_random_sim * 100, 2), round(orb_random_sim, 2)])
         
         # Append the row to the sheet
         ws.append(row)
-    
+        
+        elapsed_time = time.time() - start_time
+        print(f"Completed processing for {image_file}. Time elapsed: {elapsed_time:.2f} seconds.\n")
+
     # Apply color formatting to all percentage cells
     for row in ws.iter_rows(min_row=2, min_col=2, max_row=ws.max_row, max_col=ws.max_column):
         for cell in row:
