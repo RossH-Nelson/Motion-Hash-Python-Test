@@ -3,7 +3,6 @@ import cv2
 import numpy as np
 from PIL import Image
 import imagehash
-import random
 from openpyxl import Workbook
 from openpyxl.styles import PatternFill
 from openpyxl.utils import get_column_letter
@@ -63,11 +62,7 @@ def orb_similarity(img1, img2):
 
     # Calculate similarity based on the number of good matches
     good_matches = [m for m in matches if m.distance < 42]  # Using a distance threshold to filter good matches
-
-    # Similarity percentage is based on the ratio of good matches to the minimum number of keypoints
     similarity_percentage = len(good_matches) / min(len(kp1), len(kp2)) * 100
-
-    # Cap the similarity percentage at 100%
     return min(similarity_percentage, 100)
 
 # Function to color cells based on percentage
@@ -103,8 +98,8 @@ def process_images(image_folder, random_image_folder, output_xlsx):
     image_files = [f for f in os.listdir(image_folder) if f.endswith(('.png', '.jpg', '.jpeg'))]
     random_image_files = [f for f in os.listdir(random_image_folder) if f.endswith(('.png', '.jpg', '.jpeg'))]
 
-    # Ensure we only take 3 random images (or less if fewer are available)
-    random_image_files = random_image_files[:3]
+    # Limit to 5 random images
+    random_image_files = random_image_files[:5]
 
     # Create an Excel workbook and sheet
     wb = Workbook()
@@ -123,7 +118,9 @@ def process_images(image_folder, random_image_folder, output_xlsx):
               "Heavy Rotation 2 pHash %", "Heavy Rotation 2 ORB %", 
               "Random Image 1 pHash %", "Random Image 1 ORB %", 
               "Random Image 2 pHash %", "Random Image 2 ORB %", 
-              "Random Image 3 pHash %", "Random Image 3 ORB %"]
+              "Random Image 3 pHash %", "Random Image 3 ORB %",
+              "Random Image 4 pHash %", "Random Image 4 ORB %",
+              "Random Image 5 pHash %", "Random Image 5 ORB %"]
 
     ws.append(header)
     
@@ -180,7 +177,7 @@ def process_images(image_folder, random_image_folder, output_xlsx):
 
 if __name__ == "__main__":
     # Define the folder paths and output file
-    image_folder = '/Users/rosshartigan/Nelson Development/Motion Ads/Data-Analysis/Flyers'  # Folder with original 50 images
+    image_folder = '/Users/rosshartigan/Nelson Development/Motion Ads/Data-Analysis/Flyers'  # Folder with original 1000 images
     random_image_folder = '/Users/rosshartigan/Nelson Development/Motion Ads/Data-Analysis/Random'  # Folder with random images
     output_xlsx = '/Users/rosshartigan/Nelson Development/Motion Ads/Data-Analysis/CSV/results.xlsx'  # Path to save the Excel file
     
