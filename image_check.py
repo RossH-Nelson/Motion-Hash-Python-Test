@@ -11,6 +11,7 @@ hash1 = None
 orb_descriptors = None
 altered_images = {}
 random_image_cv = None  # For storing the random image in OpenCV format
+similarity_results = []  # Store similarity results for download
 
 # ORB detector
 orb = cv2.ORB_create()
@@ -112,27 +113,31 @@ class ImageProcessorApp:
         transformations = self.apply_transformations(self.original_image_cv)
         self.altered_images = transformations  # Save for download
 
-        results = []
+        global similarity_results
+        similarity_results = []  # Reset results for new processing
         
         # Compare each transformation to the original image
         for name, transformed_img in transformations.items():
             phash_sim = self.phash_similarity(self.original_image_cv, transformed_img) * 100
             orb_sim = self.orb_similarity(self.original_image_cv, transformed_img)
-            results.append(f"{name} vs Original: pHash {round(phash_sim, 2)}%, ORB {round(orb_sim, 2)}%")
+            result = f"{name} vs Original: pHash {round(phash_sim, 2)}%, ORB {round(orb_sim, 2)}%"
+            similarity_results.append(result)
 
         # If random image is uploaded, compare it with original and altered images
         if random_image_cv is not None:
             random_phash_sim = self.phash_similarity(self.original_image_cv, random_image_cv) * 100
             random_orb_sim = self.orb_similarity(self.original_image_cv, random_image_cv)
-            results.append(f"Random vs Original: pHash {round(random_phash_sim, 2)}%, ORB {round(random_orb_sim, 2)}%")
+            result = f"Random vs Original: pHash {round(random_phash_sim, 2)}%, ORB {round(random_orb_sim, 2)}%"
+            similarity_results.append(result)
             
             for name, transformed_img in transformations.items():
                 random_phash_sim = self.phash_similarity(random_image_cv, transformed_img) * 100
                 random_orb_sim = self.orb_similarity(random_image_cv, transformed_img)
-                results.append(f"Random vs {name}: pHash {round(random_phash_sim, 2)}%, ORB {round(random_orb_sim, 2)}%")
+                result = f"Random vs {name}: pHash {round(random_phash_sim, 2)}%, ORB {round(random_orb_sim, 2)}%"
+                similarity_results.append(result)
 
         # Display results
-        result_msg = "\n".join(results)
+        result_msg = "\n".join(similarity_results)
         self.similarity_results_label.config(text=result_msg)
         self.download_button.config(state=tk.NORMAL)
 
@@ -153,7 +158,13 @@ class ImageProcessorApp:
                 random_image_path = os.path.join(save_dir, "Random_Image.png")
                 self.random_image.save(random_image_path)
 
-            messagebox.showinfo("Download Complete", "Original, random, and altered images have been saved.")
+            # Save similarity results as a text file
+            results_path = os.path.join(save_dir, "Similarity_Results.txt")
+            with open(results_path, "w") as f:
+                for result in similarity_results:
+                    f.write(result + "\n")
+
+            messagebox.showinfo("Download Complete", "Original, random, altered images, and similarity results have been saved.")
 
 if __name__ == "__main__":
     root = tk.Tk()
