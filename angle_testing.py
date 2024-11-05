@@ -4,6 +4,7 @@ from PIL import Image, ImageTk
 import imagehash
 import cv2
 import numpy as np
+import json
 import os
 
 # ORB detector
@@ -40,6 +41,10 @@ class ImageComparisonApp:
         # Button to download results
         self.download_button = tk.Button(root, text="Download Results", command=self.download_results, state=tk.DISABLED)
         self.download_button.pack(pady=10)
+
+        # Button to download ORB JSON files
+        self.download_orb_button = tk.Button(root, text="Download ORB JSON Files", command=self.download_orb_json_files, state=tk.DISABLED)
+        self.download_orb_button.pack(pady=10)
 
     def upload_original_image(self):
         file_path = filedialog.askopenfilename(title="Select the Original Image", filetypes=[("Image Files", "*.jpg *.png *.jpeg")])
@@ -111,8 +116,9 @@ class ImageComparisonApp:
         result_msg = "\n".join(self.similarity_results)
         self.results_label.config(text=result_msg)
         
-        # Enable download button after processing
+        # Enable download buttons after processing
         self.download_button.config(state=tk.NORMAL)
+        self.download_orb_button.config(state=tk.NORMAL)
 
     def download_results(self):
         save_dir = filedialog.askdirectory(title="Select folder to save results")
@@ -122,6 +128,26 @@ class ImageComparisonApp:
                 for result in self.similarity_results:
                     f.write(result + "\n")
             messagebox.showinfo("Download Complete", "Similarity results have been saved as a text file.")
+
+    def download_orb_json_files(self):
+        save_dir = filedialog.askdirectory(title="Select folder to save ORB JSON files")
+        if save_dir:
+            # Save ORB descriptors for the original image
+            original_kp, original_des = orb.detectAndCompute(self.original_image_cv, None)
+            if original_des is not None:
+                original_des_list = original_des.tolist()  # Convert descriptors to list format
+                with open(os.path.join(save_dir, "Original_Image_ORB.json"), "w") as f:
+                    json.dump(original_des_list, f)
+            
+            # Save ORB descriptors for each comparison image
+            for i, comp_img_cv in enumerate(self.comparison_images_cv, start=1):
+                kp, des = orb.detectAndCompute(comp_img_cv, None)
+                if des is not None:
+                    des_list = des.tolist()
+                    with open(os.path.join(save_dir, f"Comparison_Image_{i}_ORB.json"), "w") as f:
+                        json.dump(des_list, f)
+
+            messagebox.showinfo("Download Complete", "ORB descriptors have been saved as JSON files.")
 
 if __name__ == "__main__":
     root = tk.Tk()
