@@ -10,6 +10,7 @@ import os
 hash1 = None
 orb_descriptors = None
 altered_images = {}
+random_image_cv = None  # For storing the random image in OpenCV format
 
 # ORB detector
 orb = cv2.ORB_create()
@@ -19,17 +20,17 @@ class ImageProcessorApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Image Processor")
-        self.root.geometry("800x600")
+        self.root.geometry("800x700")
 
         # Image upload button
-        self.upload_button = tk.Button(root, text="Upload Image", command=self.upload_image)
+        self.upload_button = tk.Button(root, text="Upload Original Image", command=self.upload_image)
         self.upload_button.pack(pady=10)
 
-        # Label to display the uploaded image
-        self.uploaded_image_label = tk.Label(root, text="Uploaded Image will be displayed here.")
-        self.uploaded_image_label.pack(pady=5)
+        # Button to upload a random image
+        self.upload_random_button = tk.Button(root, text="Upload Random Image", command=self.upload_random_image, state=tk.DISABLED)
+        self.upload_random_button.pack(pady=10)
 
-        # Label for similarity results
+        # Label to display similarity results
         self.similarity_results_label = tk.Label(root, text="Similarity Results will be displayed here.")
         self.similarity_results_label.pack(pady=5)
 
@@ -42,25 +43,31 @@ class ImageProcessorApp:
         self.download_button.pack(pady=10)
 
     def upload_image(self):
-        file_path = filedialog.askopenfilename(title="Select an image", filetypes=[("Image Files", "*.jpg *.png *.jpeg")])
+        file_path = filedialog.askopenfilename(title="Select the Original Image", filetypes=[("Image Files", "*.jpg *.png *.jpeg")])
         if file_path:
             try:
-                # Load the image with PIL and display it
+                # Load the original image with PIL and convert to OpenCV format, keeping original size
                 self.original_image = Image.open(file_path)
                 self.original_image_cv = cv2.cvtColor(np.array(self.original_image), cv2.COLOR_RGB2BGR)
-                self.display_image(self.original_image, self.uploaded_image_label)
                 
                 self.process_button.config(state=tk.NORMAL)
-                messagebox.showinfo("Success", "Image uploaded successfully.")
+                self.upload_random_button.config(state=tk.NORMAL)  # Enable random image upload
+                messagebox.showinfo("Success", "Original image uploaded successfully.")
             except Exception as e:
                 messagebox.showerror("Error", f"Error loading image: {e}")
 
-    def display_image(self, image, label):
-        # Display image in the specified Tkinter label
-        image.thumbnail((200, 200))
-        img_tk = ImageTk.PhotoImage(image)
-        label.config(image=img_tk)
-        label.image = img_tk
+    def upload_random_image(self):
+        file_path = filedialog.askopenfilename(title="Select a Random Image", filetypes=[("Image Files", "*.jpg *.png *.jpeg")])
+        if file_path:
+            try:
+                # Load the random image with PIL and convert to OpenCV format, keeping original size
+                self.random_image = Image.open(file_path)
+                global random_image_cv
+                random_image_cv = cv2.cvtColor(np.array(self.random_image), cv2.COLOR_RGB2BGR)
+                
+                messagebox.showinfo("Success", "Random image uploaded successfully.")
+            except Exception as e:
+                messagebox.showerror("Error", f"Error loading random image: {e}")
 
     def apply_transformations(self, img):
         height, width = img.shape[:2]
@@ -106,10 +113,23 @@ class ImageProcessorApp:
         self.altered_images = transformations  # Save for download
 
         results = []
+        
+        # Compare each transformation to the original image
         for name, transformed_img in transformations.items():
             phash_sim = self.phash_similarity(self.original_image_cv, transformed_img) * 100
             orb_sim = self.orb_similarity(self.original_image_cv, transformed_img)
-            results.append(f"{name}: pHash {round(phash_sim, 2)}%, ORB {round(orb_sim, 2)}%")
+            results.append(f"{name} vs Original: pHash {round(phash_sim, 2)}%, ORB {round(orb_sim, 2)}%")
+
+        # If random image is uploaded, compare it with original and altered images
+        if random_image_cv is not None:
+            random_phash_sim = self.phash_similarity(self.original_image_cv, random_image_cv) * 100
+            random_orb_sim = self.orb_similarity(self.original_image_cv, random_image_cv)
+            results.append(f"Random vs Original: pHash {round(random_phash_sim, 2)}%, ORB {round(random_orb_sim, 2)}%")
+            
+            for name, transformed_img in transformations.items():
+                random_phash_sim = self.phash_similarity(random_image_cv, transformed_img) * 100
+                random_orb_sim = self.orb_similarity(random_image_cv, transformed_img)
+                results.append(f"Random vs {name}: pHash {round(random_phash_sim, 2)}%, ORB {round(random_orb_sim, 2)}%")
 
         # Display results
         result_msg = "\n".join(results)
@@ -128,7 +148,12 @@ class ImageProcessorApp:
                 save_path = os.path.join(save_dir, f"{name}.png")
                 cv2.imwrite(save_path, img)
             
-            messagebox.showinfo("Download Complete", "Original and altered images have been saved.")
+            # Save random image if uploaded
+            if self.random_image:
+                random_image_path = os.path.join(save_dir, "Random_Image.png")
+                self.random_image.save(random_image_path)
+
+            messagebox.showinfo("Download Complete", "Original, random, and altered images have been saved.")
 
 if __name__ == "__main__":
     root = tk.Tk()
