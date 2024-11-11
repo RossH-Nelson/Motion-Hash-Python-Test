@@ -123,7 +123,8 @@ def process_images(image_folder, sample_size, output_xlsx, log_folder):
     results = []
     error_log = []  # To log errors for images smaller than the target size
 
-    for file in files:
+    for idx, file in enumerate(files, start=1):
+        print(f"Processing image {idx} of {len(files)}: {file}")
         file_path = os.path.join(image_folder, file)
         try:
             # Open the original image
@@ -153,10 +154,14 @@ def process_images(image_folder, sample_size, output_xlsx, log_folder):
                 similarity_to_standardized = calculate_hash_similarity(standardized_phash, transformed_phash)
                 black_pixel_percentage = calculate_black_pixel_percentage(transformed_image)
 
+                # Get transformed image size
+                transformed_size = f"{transformed_image.size[0]}x{transformed_image.size[1]}"
+
                 # Add to row
                 row[f"{name} pHash % Similarity to Original"] = round(similarity_to_original, 2)
                 row[f"{name} pHash % Similarity to Standardized"] = round(similarity_to_standardized, 2)
                 row[f"{name} % Black Pixels"] = black_pixel_percentage
+                row[f"{name} New Size"] = transformed_size
 
             # Append row
             results.append(row)
@@ -190,6 +195,9 @@ def write_to_excel(data, output_path):
     ]] + [f"{name} % Black Pixels" for name in [
         "Mild Crop 1", "Mild Crop 2", "Heavy Crop 1", "Heavy Crop 2",
         "Mild Rotation 1", "Mild Rotation 2", "Heavy Rotation 1", "Heavy Rotation 2"
+    ]] + [f"{name} New Size" for name in [
+        "Mild Crop 1", "Mild Crop 2", "Heavy Crop 1", "Heavy Crop 2",
+        "Mild Rotation 1", "Mild Rotation 2", "Heavy Rotation 1", "Heavy Rotation 2"
     ]]
     sheet.append(headers)
 
@@ -213,5 +221,5 @@ def write_to_excel(data, output_path):
 
 # Main execution
 if __name__ == "__main__":
-    SAMPLE_SIZE = 25  # Process only 25 images
+    SAMPLE_SIZE = 1000  # Process all 1000 images
     process_images(image_folder, SAMPLE_SIZE, output_xlsx, log_folder)
