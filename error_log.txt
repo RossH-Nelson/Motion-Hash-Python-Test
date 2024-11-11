@@ -1,3 +1,0 @@
-Image IMG-20231106-WA2194.jpg is smaller than 720x720: (444, 456)
-Image IMG-20230807-WA1447.jpg is smaller than 720x720: (622, 1280)
-Image IMG-20230828-WA0123.jpg is smaller than 720x720: (622, 1280)
