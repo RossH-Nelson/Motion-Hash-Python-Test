@@ -42,6 +42,34 @@ def calculate_black_pixel_percentage(image):
     black_percentage = (black_pixel_count / total_pixels) * 100
     return round(black_percentage, 2)
 
+# Function to resize and crop image to standardized size
+def resize_and_crop(image_path, size=(720, 720)):
+    """
+    Resizes the image to cover the target size and then crops it to exactly 720x720.
+    """
+    image = Image.open(image_path)
+    original_width, original_height = image.size
+    target_width, target_height = size
+
+    # Calculate the scale to ensure the resized image covers the target size
+    scale = max(target_width / original_width, target_height / original_height)
+    new_width = int(original_width * scale)
+    new_height = int(original_height * scale)
+
+    # Resize the image
+    image_resized = image.resize((new_width, new_height), Image.LANCZOS)
+
+    # Calculate cropping coordinates to center the image
+    left = (new_width - target_width) // 2
+    top = (new_height - target_height) // 2
+    right = left + target_width
+    bottom = top + target_height
+
+    # Crop the image
+    image_cropped = image_resized.crop((left, top, right, bottom))
+
+    return image_cropped
+
 # Function to apply mild and heavy crops and rotations
 def apply_transformations(original_image):
     """
@@ -107,6 +135,10 @@ def process_images(image_folder, sample_size, output_xlsx, log_folder):
             # Calculate original pHash
             original_phash = calculate_phash(original_image)
 
+            # Resize and crop to standardized size and calculate pHash
+            standardized_image = resize_and_crop(file_path, STANDARDIZED_SIZE)
+            standardized_phash = calculate_phash(standardized_image)
+
             # Apply transformations
             transformations = apply_transformations(original_image)
 
@@ -117,11 +149,13 @@ def process_images(image_folder, sample_size, output_xlsx, log_folder):
                 transformed_phash = calculate_phash(transformed_image)
 
                 # Calculate similarity and black pixel percentage
-                similarity = calculate_hash_similarity(original_phash, transformed_phash)
+                similarity_to_original = calculate_hash_similarity(original_phash, transformed_phash)
+                similarity_to_standardized = calculate_hash_similarity(standardized_phash, transformed_phash)
                 black_pixel_percentage = calculate_black_pixel_percentage(transformed_image)
 
                 # Add to row
-                row[f"{name} pHash % Similarity"] = round(similarity, 2)
+                row[f"{name} pHash % Similarity to Original"] = round(similarity_to_original, 2)
+                row[f"{name} pHash % Similarity to Standardized"] = round(similarity_to_standardized, 2)
                 row[f"{name} % Black Pixels"] = black_pixel_percentage
 
             # Append row
@@ -147,7 +181,10 @@ def write_to_excel(data, output_path):
     sheet = workbook.active
 
     # Add headers
-    headers = ["Image Name", "Original Size"] + [f"{name} pHash % Similarity" for name in [
+    headers = ["Image Name", "Original Size"] + [f"{name} pHash % Similarity to Original" for name in [
+        "Mild Crop 1", "Mild Crop 2", "Heavy Crop 1", "Heavy Crop 2",
+        "Mild Rotation 1", "Mild Rotation 2", "Heavy Rotation 1", "Heavy Rotation 2"
+    ]] + [f"{name} pHash % Similarity to Standardized" for name in [
         "Mild Crop 1", "Mild Crop 2", "Heavy Crop 1", "Heavy Crop 2",
         "Mild Rotation 1", "Mild Rotation 2", "Heavy Rotation 1", "Heavy Rotation 2"
     ]] + [f"{name} % Black Pixels" for name in [
